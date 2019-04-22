@@ -1,0 +1,820 @@
+一.数据处理逻辑比较简单（导出缺陷库的所有数据）直接这样传值excel.setCellValue(index, 0, index);
+模板：
+
+1.在jsp页面添加导出按钮
+<button type="button" id="defectLibraryExcelExport" class="btn btn-primary">导出内控缺陷</button>
+2.在js页面添加方法
+$("#defectLibraryExcelExport").click(function(){
+		//var id = $(this).parents('tr').attr("id");
+		//缺陷影响程度（一般/重要/重大）
+		bootbox.confirm("确认导出缺陷库数据吗？", function(result) {
+			if (result) {
+				var url =  GlobalParam.context + "/defectlibrary/DefectLibraryController/exportDefectLibrary";
+				window.open(url);
+			}
+		});
+	});
+3.java代码
+（1）controller
+/**
+     * 导出内控缺陷表
+     * @param response
+     * @return findNextMatrixProcessByParentId
+     */
+    @RequestMapping(value = "/exportDefectLibrary")
+    public String exportDefectLibrary(HttpServletResponse response) {
+        try {
+            //找到模板文件
+            String filePath = this.getClass().getResource("/excelTemplate/内控缺陷汇总表.xlsx").getPath();
+            ExportExcel excel = new ExportExcel(filePath);  
+            excel.setSheet(0);
+            //excel.setSheet(0, 1, InternalControlEvaluationExportWrap.class); 
+            List<DefectLibrary> list1 = defectLibraryService.getTableData();
+            //List<InternalControlEvaluationExportWrap> list1 = internalControlEvaluationExcelService.getInternalControlEvaluationExportData(matrixProcessId,versionId,subVersionId);
+            int index = 1;
+            IMatrixStepBean step = null;
+            for (DefectLibrary defectLibrary : list1) {
+            	excel.setCellValue(index, 0, index);
+            	excel.setCellValue(index, 3, I18nUtils.getI18nMessage("enums.IC.DefectLibrary.DefectLevel."+defectLibrary.getDefectLevel()));
+            	step = matrixStepService.findMatrixStepById(defectLibrary.getDefectObjectId(),
+                        defectLibrary.getVersionId(), defectLibrary.getSubVersionId());
+                if (null != step) {
+                	//根据传过来的末级的id，查询末级流程数据
+        			IMatrixProcessBean endprocess = matrixProcessService.getMatrixProcessById(step.getProcess().getId(),step.getProcess().getVersionId(), step.getProcess().getSubVersionId());
+        			//根据末级流程信息查询一级流程信息
+        			if(endprocess != null){
+        			List<MatrixProcessBean> matrixProcesslist = defectLibraryService.getNextMatrixProcessByParentId(endprocess.getId(),
+        					endprocess.getVersionId(), endprocess.getSubVersionId());
+        			for(Object  matrixProcess : matrixProcesslist){ 
+        				//根据传过来的matrixProcess对象转化成实体
+        					MatrixProcessBean mp =ermCommonService.findById(MatrixProcessBean.class,matrixProcess.toString());
+        					excel.setCellValue(index, 1, mp.getPrcName());
+        				} 
+        			}
+        			//如果缺陷库的数据是从测试步骤来的，则缺陷描述的值=内控差距
+        			// 根据流程步骤code查询检查结果信息
+        	        List<TestEvaluateItem> itemList = testEvaluateItemDao.getMatrixStepCheckResultByMatrixCode(step.getSystemCode(),
+        	        		step.getVersionId(), step.getSubVersionId());
+        	        if( DefectSource.MANULALLY_CREATED.toString().equals(defectLibrary.getDefectSource().toString())){
+        	        	excel.setCellValue(index, 2, defectLibrary.getDefectDesc());
+        	        }else{
+        	        	excel.setCellValue(index, 2, itemList.get(0).getIcDifference());
+        	        }
+                }
+                index++;
+            }
+            //excel.setDataList(list1);
+            excel.write(response, "内控缺陷汇总表.xlsx");
+            //关闭excel文件
+            excel.dispose();
+            return null;
+        } catch (Exception e) {
+            e.printStackTrace();
+        }
+        return "";
+    }
+（2）serviceimpl
+ /**
+     * 根据末级流程信息查询一级流程流程.
+     * 
+     * @param matrixProcessId 流程id
+     * @param versionId 内控矩阵大版本id
+     * @param subVersionId 内控矩阵小版本id
+     * @return List<MatrixProcessBean><br/>
+     * 2018-7-18
+     */
+    @Override
+    public List<MatrixProcessBean> getNextMatrixProcessByParentId(String matrixProcessId, String versionId,
+            String subVersionId) {
+        // 判断是否当前版本
+        MatrixVersionBean matrixVersion = ermCommonService.findById(MatrixVersionBean.class, versionId);
+        if (null != matrixVersion) {
+            if (MatrixVersionType.CURRENT.equals(matrixVersion.getVersionType())) {
+                // 当前版本
+                return defectLibraryDao.findNextMatrixProcessByParentId(matrixProcessId, versionId, subVersionId);
+            } else {
+                // 历史版本
+                return defectLibraryDao.findNextMatrixProcessHistoryByParentId(matrixProcessId, versionId, subVersionId);
+            }
+        }
+        return Collections.emptyList();
+    }
+（3）daoimpl
+/**
+     * 根据流程id查询末级流程.
+     * 
+     * @param matrixProcessId 流程id
+     * @param versionId 内控矩阵大版本id
+     * @param subVersionId 内控矩阵小版本id
+     * @return List<MatrixProcessBean><br/>
+     * 2018-8-10
+     */
+    @Override
+    public List<MatrixProcessBean> findNextMatrixProcessByParentId(String matrixProcessId, String versionId,
+            String subVersionId) {
+    	String hql ="select id from erm_ic_mtx_process where version_Id = '"+versionId+"' and sub_Version_Id = '"+subVersionId+"' and elevel = '1' start with Id = '"+matrixProcessId+"' connect by prior parent_id = id";
+    	Query list = this.em.createNativeQuery(hql.toString());
+    	return list.getResultList();
+    }
+    
+    
+    
+    /**
+     * 根据流程id查询末级流程(历史表).
+     * 
+     * @param matrixProcessId 流程id
+     * @param versionId 内控矩阵大版本id
+     * @param subVersionId 内控矩阵小版本id
+     * @return List<MatrixProcessBean><br/>
+     * 2017-8-10
+     */
+    @Override
+    public List<MatrixProcessBean> findNextMatrixProcessHistoryByParentId(String matrixProcessId, String versionId,
+            String subVersionId) {
+    	String hql ="select id from erm_ic_mtx_process_his where version_Id = '"+versionId+"' and sub_Version_Id = '"+subVersionId+"' and elevel = '1' start with Id = '"+matrixProcessId+"' connect by prior parent_id = id";
+    	Query list = this.em.createNativeQuery(hql.toString());
+    	return list.getResultList();
+    }
+
+二、业务逻辑比较复杂的（利用wrap封装数据，wrap：InternalControlEvaluationExportWrap）
+1、在jsp页面添加按钮
+<button id="exportMatrixEvaluationBtn" class="btn btn-link" type="button"><i class="glyphicon glyphicon-download-alt">导出内部控制评价表</i></button>
+2.在js上写方法
+/**
+	 * 导出内部控制评价表
+     */
+ 
+ 	//add by 2018-7-16 添加 导出内部控制评价表
+	$("#btnDialogExportExcelEvaluation").click(function(){
+		bootbox.confirm("确认导出内部控制评价数据吗？", function(result) {
+			var matrixProcessId = $("#matrixProcessId").val();
+			var versionId = $("#versionId").val();
+			var subVersionId = $("#subVersionId").val();
+			var subVersionCode = $("#subVersionCode").val();
+			if (result) {
+				var url =  GlobalParam.context + "/matrixtool/MatrixEvaluationExportController/downloadevaluation?matrixProcessId="+matrixProcessId+"&versionId="+versionId+"&subVersionId="+subVersionId+"";
+				window.open(url);
+			}
+		});
+	});
+
+3.java代码
+（1）controller
+/**
+ * ======================================
+ * Beijing Smartdot Tech. Co.,Ltd
+ * Date：2014-07-10 16:16:54
+ * Author：哲
+ * Version：1.0
+ * =========Modification History==========
+ * Date Name Description
+ * 2014-08-12 16:16:54 哲 创建 类
+ */
+package com.smartdot.erm.ic.matrixtool.controller;
+import com.smartdot.erm.ic.extendcolumn.service.ExtendColumnValueService;
+
+import java.io.File;
+import java.lang.ref.ReferenceQueue;
+import java.lang.ref.SoftReference;
+import java.util.ArrayList;
+import java.util.Collections;
+import java.util.Date;
+import java.util.HashMap;
+import java.util.LinkedHashMap;
+import java.util.List;
+import java.util.Map;
+
+import javax.annotation.Resource;
+import javax.servlet.http.HttpServletRequest;
+import javax.servlet.http.HttpServletResponse;
+
+import org.apache.commons.codec.binary.Base64;
+import org.apache.commons.lang.StringUtils;
+import org.springframework.stereotype.Controller;
+import org.springframework.ui.Model;
+import org.springframework.web.bind.annotation.RequestMapping;
+import org.springframework.web.bind.annotation.RequestParam;
+import org.springframework.web.bind.annotation.ResponseBody;
+import org.springframework.web.context.request.RequestAttributes;
+import org.springframework.web.context.request.RequestContextHolder;
+import org.springframework.web.context.request.ServletRequestAttributes;
+
+import com.smartdot.components.download.service.DownloadService;
+import com.smartdot.components.table.jaxb.TableDataWrap;
+import com.smartdot.erm.callback.constants.ServiceType;
+import com.smartdot.erm.callback.service.CallbackService;
+import com.smartdot.erm.commons.utils.excel.ExportExcel;
+import com.smartdot.erm.ic.constant.IcConstant;
+import com.smartdot.erm.ic.extendcolumn.entity.IExtendColumn;
+import com.smartdot.erm.ic.extendcolumn.entity.IExtendColumnValue;
+import com.smartdot.erm.ic.matrix.dao.MatrixProcessDao;
+import com.smartdot.erm.ic.matrix.entity.interfacebean.IMatrixEventBean;
+import com.smartdot.erm.ic.matrix.entity.interfacebean.IMatrixProcessBean;
+import com.smartdot.erm.ic.matrix.entity.interfacebean.IMatrixStepBean;
+import com.smartdot.erm.ic.matrix.entity.interfacebean.IMatrixStepEventRelBean;
+import com.smartdot.erm.ic.matrix.enums.MatrixCodeNumType;
+import com.smartdot.erm.ic.matrix.enums.MatrixEventDataType;
+import com.smartdot.erm.ic.matrix.enums.MatrixEventRiskSource;
+import com.smartdot.erm.ic.matrix.enums.MatrixProcessFlowType;
+import com.smartdot.erm.ic.matrix.service.MatrixEventLawService;
+import com.smartdot.erm.ic.matrix.service.MatrixEventService;
+import com.smartdot.erm.ic.matrix.service.MatrixProcessDutyEmpService;
+import com.smartdot.erm.ic.matrix.service.MatrixProcessRelInfoService;
+import com.smartdot.erm.ic.matrix.service.MatrixProcessService;
+import com.smartdot.erm.ic.matrix.service.MatrixService;
+import com.smartdot.erm.ic.matrix.service.MatrixStepEventRelService;
+import com.smartdot.erm.ic.matrix.service.MatrixStepLawService;
+import com.smartdot.erm.ic.matrix.service.MatrixStepOrgService;
+import com.smartdot.erm.ic.matrix.service.MatrixStepPositionService;
+import com.smartdot.erm.ic.matrix.service.MatrixStepService;
+import com.smartdot.erm.ic.matrix.service.MatrixStepSubstantiveTestService;
+import com.smartdot.erm.ic.matrix.service.MatrixStepWorkRecordService;
+import com.smartdot.erm.ic.matrixorg.entity.interfacebean.IMatrixOrgBean;
+import com.smartdot.erm.ic.matrixorg.service.MatrixOrgService;
+import com.smartdot.erm.ic.matrixtool.Service.InternalControlEvaluationExcelService;
+import com.smartdot.erm.ic.matrixtool.exputil.ColumnConstant;
+import com.smartdot.erm.ic.matrixtool.exputil.ERow;
+import com.smartdot.erm.ic.matrixtool.exputil.ExcelTable;
+import com.smartdot.erm.ic.matrixtool.exputil.ExcelTitle;
+import com.smartdot.erm.ic.matrixtool.exputil.ExtendColumnUtil;
+import com.smartdot.erm.ic.matrixtool.exputil.IExpToolValue;
+import com.smartdot.erm.ic.matrixtool.exputil.ImpExpLog;
+import com.smartdot.erm.ic.matrixtool.exputil.MatrixExpUtil;
+import com.smartdot.erm.ic.matrixtool.exputil.MatrixOrientedUtil;
+import com.smartdot.erm.ic.matrixtool.exputil.OutputOrientedType;
+import com.smartdot.erm.ic.matrixtool.exputil.RowTitleConstant;
+import com.smartdot.erm.ic.matrixtool.exputil.impl.ProcessDescImpl;
+import com.smartdot.erm.ic.matrixtool.exputil.impl.ProcessInterestedPartyImpl;
+import com.smartdot.erm.ic.matrixtool.exputil.impl.ProcessLinkManagerImpl;
+import com.smartdot.erm.ic.matrixtool.exputil.impl.ProcessLinkPrcTypeImpl;
+import com.smartdot.erm.ic.matrixtool.exputil.impl.ProcessManagerImpl;
+import com.smartdot.erm.ic.matrixtool.exputil.impl.ProcessRefImpl;
+import com.smartdot.erm.ic.matrixtool.exputil.impl.ProcessTargetImpl;
+import com.smartdot.erm.ic.matrixtool.exputil.impl.ProcessTestStepImpl;
+import com.smartdot.erm.ic.matrixtool.exputil.impl.StepAutomationImpl;
+import com.smartdot.erm.ic.matrixtool.exputil.impl.StepControlFrequencyImpl;
+import com.smartdot.erm.ic.matrixtool.exputil.impl.StepControlLevelImpl;
+import com.smartdot.erm.ic.matrixtool.exputil.impl.StepControlTypeImpl;
+import com.smartdot.erm.ic.matrixtool.exputil.impl.StepLawImpl;
+import com.smartdot.erm.ic.matrixtool.exputil.impl.StepOrgImpl;
+import com.smartdot.erm.ic.matrixtool.exputil.impl.StepPositionImpl;
+import com.smartdot.erm.ic.matrixtool.exputil.impl.StepRefSystemImpl;
+import com.smartdot.erm.ic.matrixtool.exputil.impl.StepTestStepImpl;
+import com.smartdot.erm.ic.matrixtool.exputil.impl.StepWorkImpl;
+import com.smartdot.erm.ic.matrixtool.wordtool.util.HTMLEncodeUtil;
+import com.smartdot.erm.ic.matrixtool.wrap.InternalControlEvaluationExportWrap;
+import com.smartdot.erm.ic.matrixversion.service.MatrixVersionService;
+
+/**
+ * @Path com.smartdot.erm.ic.matrix.controller.MatrixExportController
+ * @Description MatrixExportController控制类
+ * @date 2014-08-12 16:16:54
+ * @author 哲
+ * @version：1.0
+ */
+@Controller
+@SuppressWarnings({ "unused", "rawtypes" })
+@RequestMapping(value = "/matrixtool/MatrixEvaluationExportController")
+public class MatrixEvaluationExportController {
+	@Resource
+	private CallbackService callbackService;
+	
+	@Resource
+    private MatrixEventLawService matrixEventLawService;
+	
+	@Resource
+    private ExtendColumnValueService extendColumnValueService;
+	
+	@Resource
+    private  InternalControlEvaluationExcelService internalControlEvaluationExcelService;
+    @RequestMapping(value = "/downloadevaluation")
+    public String downloadevaluation(HttpServletResponse response,
+    		@RequestParam(value = "matrixProcessId", required = false) String matrixProcessId,
+    		@RequestParam(value = "versionId", required = false) String versionId,
+    		@RequestParam(value = "subVersionId", required = false) String subVersionId,
+    		@RequestParam(value = "matrixStepCode", required = false) String matrixStepCode) {
+        try {
+            //找到模板文件
+            String filePath = this.getClass().getResource("/excelTemplate/内部控制评价表.xlsx").getPath();
+            ExportExcel excel = new ExportExcel(filePath);            
+            //导出风险基础库sheet页签
+            excel.setSheet(0, 0, InternalControlEvaluationExportWrap.class); 
+            List<InternalControlEvaluationExportWrap> list1 = internalControlEvaluationExcelService.getInternalControlEvaluationExportData(matrixProcessId,versionId,subVersionId);
+            excel.setDataList(list1);
+            //导出一级流程参考指标sheet页签
+            /*excel.setSheet(2, 1, WkRiskLibraryReferenceIndexExcelWrap.class); 
+            List<WkRiskLibraryReferenceIndexExcelWrap> list2 = wkRiskLibraryExcelService.getRiskLibraryReferenceIndexExportData();
+            excel.setDataList(list2);*/
+            // 根据流程步骤code查询检查结果信息
+           /* List<Map<String, String>> matrixStepCheckResultList = (List<Map<String, String>>) callbackService.invoke(
+                    ServiceType.MATRIX_STEP_CHECK_RESULT, matrixStepCode, versionId, subVersionId);
+            TableDataWrap dataWrap = new TableDataWrap(matrixStepCheckResultList == null ? Collections.emptyList()
+                    : matrixStepCheckResultList);
+            excel.setDataList(matrixStepCheckResultList);*/
+           /* List<IExtendColumnValue> extendColumnValueList = extendColumnValueService.findExtendColumnValueByObjectId(
+            		matrixProcessId,versionId,subVersionId);
+            excel.setDataList(extendColumnValueList);*/
+            //将excel文件流写入response中
+            excel.write(response, "内部控制评价表.xlsx");
+            //关闭excel文件
+            excel.dispose();
+            return null;
+        } catch (Exception e) {
+            e.printStackTrace();
+        }
+        return "";
+    }
+
+}
+
+（2）serviceimpl
+package com.smartdot.erm.ic.matrixtool.Service.impl;
+import java.util.ArrayList;
+import java.util.Collections;
+import java.util.List;
+
+import javax.annotation.Resource;
+
+import org.springframework.stereotype.Service;
+
+import com.smartdot.commons.util.I18nUtils;
+import com.smartdot.commons.util.PropertyGetter;
+import com.smartdot.components.attachment.dao.AttachmentDao;
+import com.smartdot.components.attachment.entity.Attachment;
+import com.smartdot.erm.callback.service.CallbackService;
+import com.smartdot.erm.commons.service.ErmCommonService;
+import com.smartdot.erm.component.lawsQuery.entity.LawsQueryWrap;
+import com.smartdot.erm.ic.extendcolumn.dao.ExtendColumnValueDao;
+import com.smartdot.erm.ic.extendcolumn.dao.ExtendColumnValueHistoryDao;
+import com.smartdot.erm.ic.extendcolumn.entity.IExtendColumnValue;
+import com.smartdot.erm.ic.extendcolumn.service.ExtendColumnValueService;
+import com.smartdot.erm.ic.matrix.dao.MatrixProcessDao;
+import com.smartdot.erm.ic.matrix.dao.MatrixStepEventRelDao;
+import com.smartdot.erm.ic.matrix.entity.entitybean.MatrixProcessBean;
+import com.smartdot.erm.ic.matrix.entity.interfacebean.IMatrixEventBean;
+import com.smartdot.erm.ic.matrix.entity.interfacebean.IMatrixEventLawBean;
+import com.smartdot.erm.ic.matrix.entity.interfacebean.IMatrixEventOrgBean;
+import com.smartdot.erm.ic.matrix.entity.interfacebean.IMatrixProcessBean;
+import com.smartdot.erm.ic.matrix.entity.interfacebean.IMatrixStepBean;
+import com.smartdot.erm.ic.matrix.entity.interfacebean.IMatrixStepEventRelBean;
+import com.smartdot.erm.ic.matrix.service.MatrixEventLawService;
+import com.smartdot.erm.ic.matrix.service.MatrixEventOrgService;
+import com.smartdot.erm.ic.matrix.service.MatrixProcessService;
+import com.smartdot.erm.ic.matrix.service.MatrixStepService;
+import com.smartdot.erm.ic.matrixtool.Service.InternalControlEvaluationExcelService;
+import com.smartdot.erm.ic.matrixtool.dao.InternalControlEvaluationExcelDao;
+import com.smartdot.erm.ic.matrixtool.wrap.InternalControlEvaluationExportWrap;
+import com.smartdot.erm.ic.matrixversion.entity.entitybean.MatrixVersionBean;
+import com.smartdot.erm.ic.matrixversion.enums.MatrixVersionType;
+import com.smartdot.erm.ic.testevaluateexec.dao.TestEvaluateItemDao;
+import com.smartdot.erm.ic.testevaluateexec.entity.entitysuper.TestEvaluateItem;
+import com.smartdot.grcsp.organization.resource.UserResource;
+
+
+@Service
+public class InternalControlEvaluationExcelServiceimpl implements InternalControlEvaluationExcelService {
+	@Resource
+	private ErmCommonService ermCommonService;
+	@Resource
+	private ExtendColumnValueDao extendColumnValueDao;
+	@Resource
+	private ExtendColumnValueHistoryDao extendColumnValueHistoryDao;	
+	@Resource
+	private InternalControlEvaluationExcelDao internalControlEvaluationExcelDao;
+	@Resource
+	private MatrixStepService matrixStepService;
+	@Resource
+	private MatrixStepEventRelDao matrixStepEventRelDao;
+	@Resource
+	private MatrixEventOrgService matrixEventOrgService;
+	@Resource
+	private MatrixEventLawService matrixEventLawService;
+	@Resource
+	private ExtendColumnValueService extendColumnValueService;
+	@Resource
+	private MatrixProcessService matrixProcessService;
+	@Resource
+	private MatrixProcessDao matrixProcessDao;
+	@Resource
+	private CallbackService callbackService;
+	@Resource
+	private TestEvaluateItemDao testEvaluateItemDao;
+	@Resource
+	private UserResource userResource;
+	@Resource
+	private AttachmentDao attachmentDao;
+	
+	
+	@Override
+	public  List<InternalControlEvaluationExportWrap> getInternalControlEvaluationExportData(
+			String matrixProcessId, String versionId, String subVersionId) {
+		//根据一级流程 id 用递归 查询出  末级流程   （这里查出来的是一个对象，在底下会转化成一个实体）
+		List<MatrixProcessBean> matrixProcesslist = findNextMatrixProcessByParentId(matrixProcessId,
+                versionId, subVersionId);
+		//根据末级流程id集合查询流程步骤. 
+		List<String> matrixStepBeanIdList = new ArrayList<String>();
+		//循环 末级流程   查询   控制点 
+		for(Object  matrixProcess : matrixProcesslist){ 
+		//根据传过来的matrixProcess对象转化成实体
+			MatrixProcessBean mp =ermCommonService.findById(MatrixProcessBean.class,matrixProcess.toString());
+			//封装id
+			matrixStepBeanIdList.add(mp.getId());
+		}    
+		List<IMatrixStepBean> matrixStepBeanList= matrixStepService.getMatrixStepListByEndMatrixProcessId(matrixStepBeanIdList,versionId,subVersionId);
+		List<InternalControlEvaluationExportWrap>  internalControlEvaluationExportWrapList=new ArrayList<InternalControlEvaluationExportWrap>();
+		//循环  控制点，组装 InternalControlEvaluationExportWrap 需要导出的信息   internalControlEvaluationExportWrapList
+		for(IMatrixStepBean iMatrixStepBean : matrixStepBeanList){
+			//新建一个wrap，把获取到的值放入wrap中
+			InternalControlEvaluationExportWrap wrap=new InternalControlEvaluationExportWrap();
+			//根据传过来的一级流程的id，查询一个流程的数据
+			IMatrixProcessBean firstprocess = matrixProcessService.getMatrixProcessById(matrixProcessId,versionId, subVersionId);
+			//获取 一级流程name 
+			wrap.setFirstSystemCode(firstprocess.getPrcBusinessCode()+"."+firstprocess.getPrcName());
+			//获取末级流程名字
+			//wrap.setLastSystemCode(mp.getPrcBusinessCode()+"."+mp.getPrcName());
+			//获取 流程步骤
+			wrap.setProcessStep(iMatrixStepBean.getProcessStep());
+			//获取 末级流程 code + name
+			wrap.setLastSystemCode(iMatrixStepBean.getProcess().getPrcBusinessCode()+"."+iMatrixStepBean.getProcess().getPrcName());
+			//根据控制点的id获取对应的预留字段
+			List<IExtendColumnValue> extendColumnValueList = extendColumnValueService.findExtendColumnValueByObjectId(
+					iMatrixStepBean.getId(), iMatrixStepBean.getVersionId(), iMatrixStepBean.getSubVersionId());
+	        for (IExtendColumnValue iExtendColumnValue : extendColumnValueList) {
+	        	if(iExtendColumnValue.getExtendColumn().getColumnName().equals("公司控制要求")){
+	        		wrap.setCompanyControlRequirement(iExtendColumnValue.getColumnValue());
+	        	}else if(iExtendColumnValue.getExtendColumn().getColumnName().equals("本单位控制要求")){
+	        		wrap.setUnitControlRequirement(iExtendColumnValue.getColumnValue());
+	        	}
+	        	
+	        }
+	        // 根据流程步骤code查询检查结果信息
+	        List<TestEvaluateItem> itemList = testEvaluateItemDao.getMatrixStepCheckResultByMatrixCode(iMatrixStepBean.getSystemCode(),
+	        		iMatrixStepBean.getVersionId(), iMatrixStepBean.getSubVersionId());
+	        if(itemList.size()>0){
+	        	//获取控制措施执行描述  （实质性测试执行的结论描述）
+		        wrap.setConclusionDescription(itemList.get(0).getTestResultDesc());
+		        //上年度发现的缺陷，及缺陷改进后的控制情况
+		        wrap.setDefectImprovement(itemList.get(0).getImprovementSituation());
+		        //评价人  实质性测试执行的测试
+		        wrap.setTester(userResource.getUserNameById(itemList.get(0).getEvaluateSheet().getTestEmpId()));
+		        //根据附件的组id获取 附件们的name 获取测试样本及数量： 实质性测试执行的    实际样本量+测试总样本附件名称
+		        List<Attachment> attachmentList = this.attachmentDao.getAttachmentByGroupId(itemList.get(0).getTestSumAttach(), Boolean.valueOf(true));
+		        String atts = "";
+		        for(Attachment attlist : attachmentList){
+		        	atts = attlist.getName()+"/";
+		        }
+		        if(atts.length()>1){
+		        	atts=atts.substring(0, atts.length()-1);	
+				}
+		        wrap.setSampleAndSum("数量："+itemList.get(0).getEvaluateSheet().getRealSampleAmount()+"  附件："+atts);
+		        //评价结果   实质性测试执行的测试结论
+		        wrap.setTestConclusion(I18nUtils.getI18nMessage("enums.IC.TestEvaluateExec.TestConclusion."+itemList.get(0).getTestConclusion()));
+		        }
+	        // 根据流程步骤的id查询流程步骤ID与风险的关联表
+            List<IMatrixStepEventRelBean> matrixStepEventRelList = matrixStepEventRelDao.findStepEventRelListByMatrixStepId(iMatrixStepBean.getId(), 
+            		iMatrixStepBean.getVersionId(), iMatrixStepBean.getSubVersionId());
+			if(matrixStepEventRelList.size()>0){
+				IMatrixStepEventRelBean matrixStepEventRel = matrixStepEventRelList.get(0);
+				IMatrixEventBean matrixEvent = matrixStepEventRel.getMatrixEvent();
+				//获取风险事件的 风险事件字段
+				wrap.setRiskEvent(matrixEvent.getIdentifyDesc());
+				//获取风险事件的 涉及部门
+				List<IMatrixEventOrgBean> matrixEventOrgList = matrixEventOrgService.findMatrixEventOrgByMatrixEventId(
+		                matrixEvent.getId(), matrixEvent.getVersionId(), matrixEvent.getSubVersionId());
+				String matrixEventOrg = "";
+				for(IMatrixEventOrgBean iMatrixEventOrgBean : matrixEventOrgList){
+					matrixEventOrg=matrixEventOrg+iMatrixEventOrgBean.getOrgName()+"/";
+				}
+				if(matrixEventOrg.length()>1){
+					matrixEventOrg=matrixEventOrg.substring(0, matrixEventOrg.length()-1);	
+				}
+				//获取风险事件的责任部门
+				wrap.setResponsibleDepartment(matrixEventOrg);
+				//获取风险事件的 制度依据
+				List<IMatrixEventLawBean> matrixEventLawList = matrixEventLawService.findMatrixEventLawByMatrixEventId(
+		                matrixEvent.getId(), matrixEvent.getVersionId(), matrixEvent.getSubVersionId());
+		        List<LawsQueryWrap> lawsQueryWrapList = new ArrayList<LawsQueryWrap>();
+		        LawsQueryWrap lawsQueryWrap = null;
+		        for (IMatrixEventLawBean iMatrixEventLaw : matrixEventLawList) {
+		            lawsQueryWrap = new LawsQueryWrap();
+		            lawsQueryWrap.setLawId(iMatrixEventLaw.getLawId());
+		            lawsQueryWrap.setLawName(iMatrixEventLaw.getLawName());
+		            lawsQueryWrap.setLawVersionId(iMatrixEventLaw.getLawVersionId());
+		            lawsQueryWrap.setLawNameEn(iMatrixEventLaw.getLawNameEn());
+		            lawsQueryWrapList.add(lawsQueryWrap);
+		        }
+		        //获取 风险事件的规章制度
+		        if(lawsQueryWrap != null){
+		        	wrap.setInstitutionalBasis(lawsQueryWrap.getLawName());
+		        }
+		        //根据风险事件的id获取风险事件的预留字段
+		        List<IExtendColumnValue> extendColumnValueList2 = extendColumnValueService.findExtendColumnValueByObjectId(
+		                matrixEvent.getId(), matrixEvent.getVersionId(), matrixEvent.getSubVersionId());
+		        for (IExtendColumnValue iExtendColumnValue : extendColumnValueList2) {
+		        	if(iExtendColumnValue.getExtendColumn().getColumnName().equals("公司控制目标")){
+		        		wrap.setCompanyControlTarget(iExtendColumnValue.getColumnValue());
+		        	}else if(iExtendColumnValue.getExtendColumn().getColumnName().equals("本单位控制目标")){
+		        		wrap.setUnitPromptedRisk(iExtendColumnValue.getColumnValue());
+		        	}else{
+		        		wrap.setCompanyPromptedRisk(iExtendColumnValue.getColumnValue());
+		        	}		        	
+		        }
+		        
+			}
+			internalControlEvaluationExportWrapList.add(wrap);
+		}
+		return internalControlEvaluationExportWrapList;
+	}
+	
+	/**
+     * 根据流程id查询末级流程.
+     * 
+     * @param matrixProcessId 流程id
+     * @param versionId 内控矩阵大版本id
+     * @param subVersionId 内控矩阵小版本id
+     * @return List<MatrixProcessBean><br/>
+     * 2018-7-18
+     */
+    @Override
+    public List<MatrixProcessBean> findNextMatrixProcessByParentId(String matrixProcessId, String versionId,
+            String subVersionId) {
+        // 判断是否当前版本
+        MatrixVersionBean matrixVersion = ermCommonService.findById(MatrixVersionBean.class, versionId);
+        if (null != matrixVersion) {
+            if (MatrixVersionType.CURRENT.equals(matrixVersion.getVersionType())) {
+                // 当前版本
+                return internalControlEvaluationExcelDao.findNextMatrixProcessByParentId(matrixProcessId, versionId, subVersionId);
+            } else {
+                // 历史版本
+                return internalControlEvaluationExcelDao.findNextMatrixProcessHistoryByParentId(matrixProcessId, versionId, subVersionId);
+            }
+        }
+        return Collections.emptyList();
+    }
+	
+	/**
+	 * 获取内控扩展属性值列表.
+	 * 
+	 * @param objectId
+	 *            业务对象id
+	 * @param versionId
+	 *            大版本id
+	 * @param subVersionId
+	 *            小版本id
+	 * @return List<IExtendColumnValue><br/>
+	 */
+	@Override
+	public List<IExtendColumnValue> findExtendColumnValueByObjectId(
+			String matrixStepId, String versionId, String subVersionId) {
+		// 判断是否当前版本
+		MatrixVersionBean matrixVersion = ermCommonService.findById(
+				MatrixVersionBean.class, versionId);
+		if (null != matrixVersion) {
+			if (MatrixVersionType.CURRENT.equals(matrixVersion.getVersionType())) {
+				// 当前版本
+				return extendColumnValueDao.findExtendColumnValueByObjectId(
+						matrixStepId, versionId, subVersionId);
+			} else {
+				// 历史版本
+				return extendColumnValueHistoryDao
+						.findExtendColumnValueByObjectId(matrixStepId, versionId,
+								subVersionId);
+			}
+		}
+		return Collections.emptyList();
+	}
+	
+}
+
+（3）daoimpl
+package com.smartdot.erm.ic.matrixtool.dao.impl;
+
+import java.util.ArrayList;
+import java.util.List;
+
+import javax.persistence.Query;
+
+import org.springframework.stereotype.Repository;
+
+import com.smartdot.erm.commons.dao.impl.ErmGenericDaoImpl;
+import com.smartdot.erm.ic.matrix.entity.entitybean.MatrixProcessBean;
+import com.smartdot.erm.ic.matrixtool.dao.InternalControlEvaluationExcelDao;
+
+@Repository
+@SuppressWarnings("unchecked")
+public class InternalControlEvaluationExcelDaoImpl extends ErmGenericDaoImpl<MatrixProcessBean> implements InternalControlEvaluationExcelDao {
+	/**
+     * 根据流程id查询末级流程.
+     * 
+     * @param matrixProcessId 流程id
+     * @param versionId 内控矩阵大版本id
+     * @param subVersionId 内控矩阵小版本id
+     * @return List<MatrixProcessBean><br/>
+     * 2018-7-18
+     * select * from erm_ic_mtx_process  where  is_end = '1' start with id='7058356447792219704_-5452831204378918764'  connect by prior id=parent_id  
+     */
+    @Override
+    public List<MatrixProcessBean> findNextMatrixProcessByParentId(String matrixProcessId, String versionId,
+            String subVersionId) {
+    	String hql ="select id from erm_ic_mtx_process where version_Id = '"+versionId+"' and sub_Version_Id = '"+subVersionId+"' and is_End = '1'  start with Id = '"+matrixProcessId+"' connect by prior id = parent_id";
+    	Query list = this.em.createNativeQuery(hql.toString());
+    	return list.getResultList();
+    }
+    
+    /**
+     * 根据流程id查询末级流程.
+     * 
+     * @param matrixProcessId 流程id
+     * @param versionId 内控矩阵大版本id
+     * @param subVersionId 内控矩阵小版本id
+     * @return List<MatrixProcessBean><br/>
+     * 2017-7-18
+     */
+    @Override
+    public List<MatrixProcessBean> findNextMatrixProcessHistoryByParentId(String matrixProcessId, String versionId,
+            String subVersionId) {
+        /*String jpql = "from MatrixProcessHistoryBean where deleted = ? and versionId = ? and subVersionId = ? and is_end = ? start with matrixProcessId = ?  connect by prior id=parent_id ";
+        return (List<MatrixProcessBean>) this.findInstance(jpql, false, versionId, subVersionId,true, matrixProcessId);*/
+    	String hql ="select id from erm_ic_mtx_process_his where version_Id = '"+versionId+"' and sub_Version_Id = '"+subVersionId+"' and is_End = '1'  start with Id = '"+matrixProcessId+"' connect by prior id = parent_id";
+    	Query list = this.em.createNativeQuery(hql.toString());
+    	return list.getResultList();
+    }
+
+}
+（4）wrap（按照导出的列的顺序排列）
+package com.smartdot.erm.ic.matrixtool.wrap;
+
+import com.smartdot.erm.commons.utils.excel.annotation.ExcelField;
+import com.smartdot.erm.ic.testevaluateexec.enums.TestConclusion;
+/*
+ * @path com.smartdot.erm.ic.matrixtool.wrap
+ * @Description InternalControlEvaluationExportWrap 封装导出内部控制控制评价表的所有列
+ * @date 2018-7-17
+ * @aythor fyy
+ */
+public class InternalControlEvaluationExportWrap {
+    // 流程编号 (一级流程编号)
+    public String firstSystemCode;
+    // 流程编号 (末级级流程编号)
+    public String lastSystemCode;
+    // 公司提示的风险
+    public String companyPromptedRisk;
+    //本单位识别的风险
+    public String riskEvent;
+    // 公司控制目标
+    public String companyControlTarget;
+    // 本单位控制目标
+    public String unitPromptedRisk;
+    //涉及部门
+    public String responsibleDepartment;
+    //公司控制要求
+    public String companyControlRequirement;
+    //本单位控制要求
+    public String unitControlRequirement;
+    // 控制措施
+    public String processStep;
+    //支持文件
+    public String institutionalBasis;
+    //控制措施执行描述
+    public String conclusionDescription;
+    //测试样本及数量
+    public String sampleAndSum;
+    //上年度发现的缺陷，及缺陷改进后的控制情况
+    public String defectImprovement;
+    //评价结果
+    public String testConclusion;
+	
+	//评价人
+    public String tester;
+    
+    // 流程编号 (一级流程编号)
+    @ExcelField(title="内控领域/流程", i18nTitle = "",align=2, sort=0)
+	public String getFirstSystemCode() {
+		return firstSystemCode;
+	}
+	public void setFirstSystemCode(String firstSystemCode) {
+		this.firstSystemCode = firstSystemCode;
+	}
+	
+	@ExcelField(title="事项/子流程", i18nTitle = "",align=2, sort=1)
+	public String getLastSystemCode() {
+		return lastSystemCode;
+	}
+	public void setLastSystemCode(String lastSystemCode) {
+		this.lastSystemCode = lastSystemCode;
+	}
+	
+	@ExcelField(title="公司提示的风险", i18nTitle = "",align=2, sort=2)
+	public String getCompanyPromptedRisk() {
+		return companyPromptedRisk;
+	}
+	public void setCompanyPromptedRisk(String companyPromptedRisk) {
+		this.companyPromptedRisk = companyPromptedRisk;
+	}
+	
+	@ExcelField(title="本单位识别的风险", i18nTitle = "",align=2, sort=3)
+	public String getRiskEvent() {
+		return riskEvent;
+	}
+	public void setRiskEvent(String riskEvent) {
+		this.riskEvent = riskEvent;
+	}
+	
+	@ExcelField(title="公司控制目标", i18nTitle = "",align=2, sort=4)
+	public String getCompanyControlTarget() {
+		return companyControlTarget;
+	}
+	public void setCompanyControlTarget(String companyControlTarget) {
+		this.companyControlTarget = companyControlTarget;
+	}
+	
+	@ExcelField(title="本单位控制目标", i18nTitle = "",align=2, sort=5)
+	public String getUnitPromptedRisk() {
+		return unitPromptedRisk;
+	}
+	public void setUnitPromptedRisk(String unitPromptedRisk) {
+		this.unitPromptedRisk = unitPromptedRisk;
+	}
+	
+	@ExcelField(title="涉及部门", i18nTitle = "",align=2, sort=6)
+	public String getResponsibleDepartment() {
+		return responsibleDepartment;
+	}
+	public void setResponsibleDepartment(String responsibleDepartment) {
+		this.responsibleDepartment = responsibleDepartment;
+	}
+	
+	@ExcelField(title="公司控制要求", i18nTitle = "",align=2, sort=7)
+	public String getCompanyControlRequirement() {
+		return companyControlRequirement;
+	}
+	public void setCompanyControlRequirement(String companyControlRequirement) {
+		this.companyControlRequirement = companyControlRequirement;
+	}
+	
+	@ExcelField(title="本单位控制要求", i18nTitle = "",align=2, sort=8)
+	public String getUnitControlRequirement() {
+		return unitControlRequirement;
+	}
+	public void setUnitControlRequirement(String unitControlRequirement) {
+		this.unitControlRequirement = unitControlRequirement;
+	}
+	
+	@ExcelField(title="控制措施", i18nTitle = "",align=2, sort=9)
+	public String getProcessStep() {
+		return processStep;
+	}
+	public void setProcessStep(String processStep) {
+		this.processStep = processStep;
+	}
+	
+	@ExcelField(title="支持文件", i18nTitle = "",align=2, sort=10)
+	public String getInstitutionalBasis() {
+		return institutionalBasis;
+	}
+	public void setInstitutionalBasis(String institutionalBasis) {
+		this.institutionalBasis = institutionalBasis;
+	}
+	
+	@ExcelField(title="控制措施执行描述", i18nTitle = "",align=2, sort=11)
+	public String getConclusionDescription() {
+		return conclusionDescription;
+	}
+	public void setConclusionDescription(String conclusionDescription) {
+		this.conclusionDescription = conclusionDescription;
+	}
+	
+	@ExcelField(title="测试样本及数量", i18nTitle = "",align=2, sort=12)
+	public String getSampleAndSum() {
+		return sampleAndSum;
+	}
+	public void setSampleAndSum(String sampleAndSum) {
+		this.sampleAndSum = sampleAndSum;
+	}
+	
+	@ExcelField(title="上年度发现的缺陷，及缺陷改进后的控制情况", i18nTitle = "",align=2, sort=13)
+	public String getDefectImprovement() {
+		return defectImprovement;
+	}
+	public void setDefectImprovement(String defectImprovement) {
+		this.defectImprovement = defectImprovement;
+	}
+	
+	@ExcelField(title="评价结果", i18nTitle = "",align=2, sort=14)
+	public String gettestConclusion() {
+		return testConclusion;
+	}
+	public void setTestConclusion(String testConclusion) {
+		this.testConclusion = testConclusion;
+	}
+	
+	@ExcelField(title="评价人", i18nTitle = "",align=2, sort=15)
+	public String getTester() {
+		return tester;
+	}
+	public void setTester(String tester) {
+		this.tester = tester;
+	}
+	
+}
+
