@@ -1,0 +1,272 @@
+1.在js中添加动态导出按钮
+operate += "&nbsp;<span class=\"label label-sm label-info\" name=\"exportBtn\"><i class=\"glyphicon glyphicon-open\" title=\"导出缺陷整改记录\"></i></span>";
+2.在js中添加跳转controller的方法
+		$("#rectifyExecTable").find("span[name='exportBtn']").click(function(){
+			var id = $(this).parents('tr').attr("id");
+			var currentState = $("#currentState").val();
+			bootbox.confirm("确认导出缺陷整改记录表吗？", function(result) {
+				if (result) {
+					var url =  GlobalParam.context + "/defectlibrary/DefectEectificationExportController/exportDefectEectification?Id="+id+"&processState="+currentState;
+					window.open(url);
+				}
+			});
+		});
+注:我这里传的id和流程状态（id必须要传，其余的值，看自己需要什么值）
+3.用word编辑到所需要的模板，并保存为.xml格式
+ （1）普通字符串用${string}替换
+ （2）<#list  userList as user>
+注：可以先在传值的地方输入汉字，保存为.xml文件后，在修改占位符
+word模板如图所示：
+
+
+4.java代码，进行数据处理，并调用导出方法：
+package com.smartdot.erm.ic.defectlibrary.controller;
+import java.awt.Checkbox;
+import java.util.ArrayList;
+import java.util.HashMap;
+import java.util.List;
+import java.util.Map;
+import javax.annotation.Resource;
+import javax.servlet.http.HttpServletRequest;
+import javax.servlet.http.HttpServletResponse;
+import org.springframework.stereotype.Controller;
+import org.springframework.web.bind.annotation.RequestMapping;
+import org.springframework.web.bind.annotation.RequestParam;
+import com.smartdot.commons.util.I18nUtils;
+import com.smartdot.erm.commons.ExportDocUtil;
+import com.smartdot.erm.commons.service.ErmCommonService;
+import com.smartdot.erm.ic.defectlibrary.entity.entitybean.RectifyExecBean;
+import com.smartdot.erm.ic.defectlibrary.entity.entitysuper.DefectLibrary;
+import com.smartdot.erm.ic.defectlibrary.entity.entitysuper.RectifyExec;
+import com.smartdot.erm.ic.defectlibrary.enums.DefectSource;
+import com.smartdot.erm.ic.defectlibrary.service.DefectLibraryService;
+import com.smartdot.erm.ic.matrix.entity.entitybean.MatrixProcessBean;
+import com.smartdot.erm.ic.matrix.entity.interfacebean.IMatrixProcessBean;
+import com.smartdot.erm.ic.matrix.entity.interfacebean.IMatrixStepBean;
+import com.smartdot.erm.ic.matrix.service.MatrixProcessService;
+import com.smartdot.erm.ic.matrix.service.MatrixStepService;
+import com.smartdot.erm.ic.testevaluateexec.dao.TestEvaluateItemDao;
+import com.smartdot.erm.ic.testevaluateexec.entity.entitysuper.TestEvaluateItem;
+/**
+ * 导出缺陷整改记录
+ * @path com.smartdot.erm.ic.defectlibrary.controller.DefectEectificationExportController
+ * @author fangyy
+ * @date 2018-8-13
+ */
+@Controller
+@RequestMapping(value="/defectlibrary/DefectEectificationExportController")
+public class DefectEectificationExportController {
+	@Resource
+    private ErmCommonService ermCommonService;
+	@Resource
+    private MatrixStepService matrixStepService;
+	@Resource
+    private MatrixProcessService matrixProcessService;
+	@Resource
+    private DefectLibraryService defectLibraryService;
+	@Resource
+    private TestEvaluateItemDao testEvaluateItemDao;
+	/**
+	 * 缺陷整改记录导出（word）
+	 * 2018-8-13
+	 */
+	@RequestMapping(value="/exportDefectEectification")
+    public void exportTestEvaluateSubstantive(HttpServletResponse response,HttpServletRequest request,
+            @RequestParam(value="Id") String id,@RequestParam(value="processState") String processState){
+		//根据传过来的数据id查询缺陷整改库
+ 		RectifyExec rectifyExec = ermCommonService.findById(RectifyExecBean.class, id);
+		//根据缺陷整改数据查询缺陷库的数据
+		DefectLibrary defectLibrary = rectifyExec.getDefectLibrary();
+        IMatrixStepBean matrixStep = matrixStepService.findMatrixStepById(defectLibrary.getDefectObjectId(),
+                defectLibrary.getVersionId(), defectLibrary.getSubVersionId());
+        Map<String, Object> map=new HashMap<String, Object>();
+        //获取缺陷影响程度
+        if(I18nUtils.getI18nMessage("enums.IC.DefectLibrary.DefectLevel."+defectLibrary.getDefectLevel()) == "一般缺陷"){
+        	map.put("influence","一般缺陷（√） 重要缺陷（ ） 重大缺陷（ ）");
+        }else if(I18nUtils.getI18nMessage("enums.IC.DefectLibrary.DefectLevel."+defectLibrary.getDefectLevel()) == "重要缺陷"){
+        	map.put("influence","一般缺陷（ ） 重要缺陷（√）  重大缺陷（ ）");
+        }else{
+        	map.put("influence","一般缺陷（ ）重要缺陷（ ） 重大缺陷（√）");
+        }
+        //获取内控缺陷属性
+        if(I18nUtils.getI18nMessage("enums.IC.DefectLibrary.DefectType."+defectLibrary.getDefectType()) == "执行问题，控制措施未执行" ){
+        	map.put("attributes","设计缺陷（ ）  执行缺陷（√） 设计与执行均存在缺陷（ ）");
+        }else if(I18nUtils.getI18nMessage("enums.IC.DefectLibrary.DefectType."+defectLibrary.getDefectType()) == "设计问题，设计无效"){
+        	map.put("attributes","设计缺陷（√）  执行缺陷（ ） 设计与执行均存在缺陷（ ）");
+        }else{
+        	map.put("attributes","设计缺陷（ ）  执行缺陷（ ） 设计与执行均存在缺陷（√）");
+        }
+        //获取主控部门
+        map.put("dept", matrixStep.getDeptName());
+        //获取原因分析
+        map.put("reason",rectifyExec.getCauseAnalysis());
+        //获取整改措施
+        map.put("rectify",rectifyExec.getRectifyStep());
+        //获取整改措施实施情况
+        if(processState.toString().equals("DRAFT")){
+        	map.put("status", "待整改");
+        }else if(processState.toString().equals("EXAMINATION_AND_APPROVAL")){
+        	map.put("status", "整改中");
+        }else{
+        	map.put("status", "整改完成");
+        }
+        if (null != matrixStep) {
+        	//根据传过来的末级的id，查询末级流程数据
+			IMatrixProcessBean endprocess = matrixProcessService.getMatrixProcessById(matrixStep.getProcess().getId(),matrixStep.getProcess().getVersionId(), matrixStep.getProcess().getSubVersionId());
+			//根据末级流程信息查询一级流程信息
+			if(endprocess != null){
+			List<MatrixProcessBean> matrixProcesslist = defectLibraryService.getNextMatrixProcessByParentId(endprocess.getId(),
+					endprocess.getVersionId(), endprocess.getSubVersionId());
+			for(Object  matrixProcess : matrixProcesslist){ 
+				//根据传过来的matrixProcess对象转化成实体
+					MatrixProcessBean mp =ermCommonService.findById(MatrixProcessBean.class,matrixProcess.toString());
+					//获取一级流程的名称
+					map.put("prcName", mp.getPrcName());
+				} 
+			}
+			//如果缺陷库的数据是从测试步骤来的，则缺陷描述的值=内控差距
+			// 根据流程步骤code查询检查结果信息
+	        List<TestEvaluateItem> itemList = testEvaluateItemDao.getMatrixStepCheckResultByMatrixCode(matrixStep.getSystemCode(),
+	        		matrixStep.getVersionId(), matrixStep.getSubVersionId());
+	        if( DefectSource.MANULALLY_CREATED.toString().equals(defectLibrary.getDefectSource().toString())){
+	        	//获取内控缺陷描述
+	        	map.put("description",defectLibrary.getDefectDesc());
+	        }else{
+	        	map.put("description",itemList.get(0).getIcDifference());
+	        }
+        }
+    	// 模板路径
+    	String templatePath = "/wordtemplate";
+    	// 模板名称
+    	String templateName = "内部控制缺陷整改记录表.xml";
+    	String fileName = "内部控制缺陷整改记录表.doc";
+    	ExportDocUtil.createDoc(response,fileName,templatePath,templateName,map);
+	
+}
+}
+注：用map传值。例：map.put("description",defectLibrary.getDefectDesc());前面是占位符的名字，后面是传的值
+
+5.工具类
+ （1）DocumentHandler.java
+package com.smartdot.erm.commons;
+import java.io.BufferedWriter;
+import java.io.File;
+import java.io.FileOutputStream;
+import java.io.IOException;
+import java.io.OutputStreamWriter;
+import java.io.Writer;
+import java.util.Map;
+import freemarker.template.Configuration;
+import freemarker.template.Template;
+import freemarker.template.TemplateException;
+/**
+ * 读写xml模板工具
+ * @author yanghb
+ *
+ */
+public class DocumentHandler {
+	private Configuration configuration = null;
+	 
+	public DocumentHandler() {
+		 configuration = new Configuration();
+		 configuration.setDefaultEncoding("utf-8");
+	 }
+	/**
+	 *
+	 * @param templatePath 模板路径 
+	 * @param templateName 模板名称
+	 * @return
+	 */
+	public Template getTemplate(String templatePath,String templateName){
+		 configuration.setClassForTemplateLoading(this.getClass(), templatePath);
+		 Template t = null;
+		 try {
+			 t = configuration.getTemplate(templateName);
+			 t.setEncoding("utf-8");
+		 } catch (IOException e) {
+			 e.printStackTrace();
+		 }
+		 return t;
+	 }
+	/**
+	 * 
+	 * @param outFile 数据文件
+	 * @return
+	 */
+	public Writer getWriter(File outFile){
+		 Writer out = null;
+		 try {
+			 out = new BufferedWriter(new OutputStreamWriter(
+					 new FileOutputStream(outFile), "utf-8"));
+		 } catch (Exception e1) {
+			 e1.printStackTrace();
+		 }
+		 return out;
+	 }
+	public void createDoc(Template t,Map dataMap,Writer out) {
+		 try {
+			 t.process(dataMap, out);
+			 out.close();
+		 } catch (TemplateException e) {
+			 e.printStackTrace();
+		 } catch (IOException e) {
+			 e.printStackTrace();
+		 }
+	}
+}
+
+ （2）ExportDocUtil.java
+	
+package com.smartdot.erm.commons;
+import java.io.File;
+import java.io.FileInputStream;
+import java.io.Writer;
+import java.util.Map;
+import javax.servlet.ServletOutputStream;
+import javax.servlet.http.HttpServletResponse;
+
+import freemarker.template.Template;
+/**
+ * word导出工具
+ * @author shaoll
+ *
+ */
+public class ExportDocUtil {
+	
+	public static void createDoc(HttpServletResponse response,String fileName,String templatePath,String templateName,
+			Map dataMap){
+		try {
+			File f = new File(fileName);
+			DocumentHandler dh = new DocumentHandler();
+			Template t = dh.getTemplate(templatePath, templateName);
+			Writer out = dh.getWriter(f);
+			dh.createDoc(t, dataMap, out);
+			FileInputStream fin = new FileInputStream(f);
+			ServletOutputStream fileOut = response.getOutputStream();
+			response.reset();
+			response.setContentType("doc");
+                //inline：表示在线预览  attachment：表示下载并保存
+			response.setHeader("Content-Disposition", "attachment; filename="+ java.net.URLEncoder.encode(fileName, "UTF-8") + ';');
+		    response.setContentType("application/octet-stream; charset=utf-8");
+			byte buffer[] = new byte[8192];
+			do {
+				int bytesRead = fin.read(buffer);
+				if (bytesRead == -1) {
+					break;
+				}
+				fileOut.write(buffer, 0, bytesRead);
+				fileOut.flush();
+			} while (true);
+			fin.close();
+			fileOut.close();
+		}catch (Exception e) {
+			// TODO: handle exception
+		}
+	}
+}
+注：工具类按照路径放正确就好，直接使用哦
+
+6.注意注意：
+1、 编辑word模板时，如果直接采用占位符的方式，需要注意${string} 标签最好是手动一次性输入完毕，或者使用记事本统一将整个${string}编辑好之后，粘贴至word里边。
+也就是说，不要在word里首先打完 ${ } 之后，又从其它地方把 string 字符串粘贴至 { } 之间，这样在 word 转化为 xml时，解析会有问题，freemarker解析时，会报错。
+2、 如果word里有需要循环表格列，也就是横向循环表格时，建议尽量改为循环行，纵向循环，这样可以减少对xml文件的 list标签插入，缩减工作量。
